@@ -52,7 +52,7 @@ machine.
 
 | Setting | Default | Notes |
 |---|---|---|
-| Scheme / Host / Port | `http` / `localhost` / `11434` | Where Ollama listens. **Test connection** reports its version. |
+| Scheme / Host / Port | `http` / `localhost` / `11434` | Where Ollama listens. **Test connection** reports its version and, when it succeeds, refreshes the Model dropdown. |
 | Model | first advertised model with tool support | The dropdown is what `GET /api/tags` returns; models without tool support are greyed out. **Refresh** asks again. The panel header has the same dropdown. |
 | Thinking | model default | `on` / `off` sets `think` on the request. Off is faster. |
 | Context length | 16384 | `options.num_ctx`. Page text plus the tool definitions need room; empty means Ollama's default, which is usually too small. |

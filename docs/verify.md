@@ -8,9 +8,9 @@ jsdom. These checks need real Chrome.
 
 1. `./scripts/build.sh`, then `chrome://extensions` → Load unpacked → `extension/`.
 2. Open the config window (⚙ in the panel, or Details → Extension options).
-   **Test connection** reports `Ollama <version> at http://localhost:11434`.
+   **Test connection** reports `Ollama <version> at http://localhost:11434 — <n> model(s)` and the Model dropdown fills in without pressing **Refresh**.
 3. The Model dropdown lists what `ollama list` shows; models without tool support are greyed out. Pick one, **Save**.
-4. Set Host to a wrong address, **Test connection**: the error names the address and says to check host/port. Set it back.
+4. Set Host to a wrong address, **Test connection**: the error names the address and says to check host/port, and the Model dropdown keeps its list (the version check fails first, so no refresh runs). Set it back.
 5. Open any https page. The **DomBot** pill is at the bottom right. Click it: the panel opens, and the header dropdown shows the same models.
 
 ## Chat and tools

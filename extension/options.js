@@ -57,12 +57,19 @@ function showStatus(text, ok) {
 
 async function testConnection() {
   const base = fieldsBase();
+  const btn = $("test");
+  btn.disabled = true;
   showStatus(`Checking ${base}…`, true);
   try {
     const v = await version({ base, signal: AbortSignal.timeout(5000) });
-    showStatus(`Ollama ${v} at ${base}`, true);
+    showStatus(`Ollama ${v} at ${base} — loading models…`, true);
+    // A reachable Ollama means the model list is worth fetching right away.
+    const count = await refreshModels(undefined, { quiet: true });
+    if (count !== null) showStatus(`Ollama ${v} at ${base} — ${count} model(s)`, true);
   } catch (err) {
     showStatus(err.message, false);
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -108,17 +115,21 @@ function describeModel() {
   info.textContent = parts.join(" · ");
 }
 
-async function refreshModels(selected) {
+// Returns the model count, or null when Ollama could not be listed.
+// quiet: leave the status line to the caller on success (failures always show).
+async function refreshModels(selected, { quiet = false } = {}) {
   const base = fieldsBase();
   const btn = $("refresh");
   btn.disabled = true;
   try {
     const list = await listModels({ base, signal: AbortSignal.timeout(15000) });
     renderModelOptions(list, selected ?? $("model").value);
-    showStatus(`${list.length} model(s) at ${base}`, true);
+    if (!quiet) showStatus(`${list.length} model(s) at ${base}`, true);
+    return list.length;
   } catch (err) {
     renderModelOptions([], selected ?? $("model").value);
     showStatus(err.message, false);
+    return null;
   } finally {
     btn.disabled = false;
   }
