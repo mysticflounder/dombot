@@ -34,7 +34,8 @@
 .root.expanded .panel { display: flex; }
 .header { display: flex; align-items: center; gap: 4px; padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--panel); }
 .title { font-weight: 700; margin-right: 6px; }
-.model { color: var(--muted); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model { flex: 1; min-width: 0; max-width: 150px; font: inherit; font-size: 11px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 2px 4px; cursor: pointer; }
+.model:hover, .model:focus { border-color: var(--border); color: var(--fg); outline: none; }
 .icon { border: 0; background: transparent; color: var(--fg); cursor: pointer; font: inherit; font-size: 14px; padding: 2px 6px; border-radius: 6px; line-height: 1; }
 .icon:hover, .icon.active { background: var(--border); }
 .body { display: none; flex: 1; min-height: 0; flex-direction: column; }
@@ -167,7 +168,7 @@ textarea:focus { border-color: var(--accent); }
 
   const ui = {};
   ui.pill = el("button", { class: "pill", type: "button", title: "Open DomBot" }, "DomBot");
-  ui.model = el("span", { class: "model" });
+  ui.model = el("select", { class: "model", title: "Model (what Ollama advertises)" });
   ui.savedBtn = el("button", { class: "icon", type: "button", title: "Saved changes for this page" }, "☰");
   ui.newBtn = el("button", { class: "icon", type: "button", title: "New chat" }, "⟲");
   ui.settingsBtn = el("button", { class: "icon", type: "button", title: "Settings" }, "⚙");
@@ -219,6 +220,7 @@ textarea:focus { border-color: var(--accent); }
     if (next === "expanded") {
       wantPort = true;
       connect();
+      loadModels();
       if (view === "saved") renderSaved();
       else ui.input.focus();
     } else if (!busy) {
@@ -315,9 +317,9 @@ textarea:focus { border-color: var(--accent); }
     };
   }
 
-  function addError(message, { needsKey = false } = {}) {
+  function addError(message, { needsSetup = false } = {}) {
     const box = el("div", { class: "error" }, message);
-    if (needsKey) {
+    if (needsSetup) {
       const b = el("button", { type: "button" }, "Open settings");
       b.addEventListener("click", openOptions);
       box.appendChild(b);
@@ -343,10 +345,8 @@ textarea:focus { border-color: var(--accent); }
   }
 
   function noteStop(msg) {
-    if (msg.stopReason === "max_tokens") addNote("Stopped: the reply hit the max_tokens limit.");
-    else if (msg.stopReason === "refusal") addNote(`Declined by the model${msg.stopDetails?.category ? ` (${msg.stopDetails.category})` : ""}.`);
+    if (msg.stopReason === "length") addNote("Stopped: the model hit its context or output limit. Raise the context length in settings.");
     else if (msg.stopReason === "cancelled") addNote("Stopped.");
-    if (msg.model) ui.model.textContent = msg.model;
   }
 
   // -------------------------------------------------------------------------
@@ -419,7 +419,7 @@ textarea:focus { border-color: var(--accent); }
       case "error":
         finishAssistant();
         setBusy(false);
-        addError(msg.message ?? "unknown error", { needsKey: Boolean(msg.needsKey) });
+        addError(msg.message ?? "unknown error", { needsSetup: Boolean(msg.needsSetup) });
         break;
       default:
         break;
@@ -623,6 +623,47 @@ textarea:focus { border-color: var(--accent); }
   }
 
   // -------------------------------------------------------------------------
+  // Model dropdown (what Ollama advertises)
+  // -------------------------------------------------------------------------
+
+  let models = [];
+  let wantedModel = "";
+
+  function renderModelOptions() {
+    ui.model.textContent = "";
+    const known = models.some((m) => m.name === wantedModel);
+    if (wantedModel && !known) ui.model.appendChild(el("option", { value: wantedModel }, `${wantedModel} (not found)`));
+    for (const m of models) {
+      const opt = el("option", { value: m.name }, m.tools === false ? `${m.name} (no tools)` : m.name);
+      if (m.tools === false) opt.disabled = true;
+      ui.model.appendChild(opt);
+    }
+    if (!ui.model.options.length) ui.model.appendChild(el("option", { value: "" }, "no models"));
+    ui.model.value = wantedModel || (models.find((m) => m.tools !== false)?.name ?? models[0]?.name ?? "");
+  }
+
+  function setModelValue(name) {
+    wantedModel = name;
+    renderModelOptions();
+  }
+
+  async function loadModels() {
+    const res = await sendMessage({ type: "models.list" });
+    if (res.ok) {
+      models = Array.isArray(res.result) ? res.result : [];
+      ui.model.title = "Model (what Ollama advertises)";
+    } else {
+      models = [];
+      ui.model.title = res.error;
+    }
+    renderModelOptions();
+  }
+
+  ui.model.addEventListener("change", () => {
+    if (ui.model.value) chrome.storage.local.set({ model: ui.model.value });
+  });
+
+  // -------------------------------------------------------------------------
   // Wiring
   // -------------------------------------------------------------------------
 
@@ -649,7 +690,8 @@ textarea:focus { border-color: var(--accent); }
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
-    if (changes.model) ui.model.textContent = changes.model.newValue ?? "";
+    if (changes.model) setModelValue(changes.model.newValue ?? "");
+    if (changes.scheme || changes.host || changes.port) loadModels();
     if (changes.edits) {
       if (view === "saved") renderSaved();
       applySavedEdits();
@@ -659,7 +701,7 @@ textarea:focus { border-color: var(--accent); }
   chrome.storage.local
     .get({ showPill: true, model: "" })
     .then((cfg) => {
-      ui.model.textContent = cfg.model ?? "";
+      setModelValue(cfg.model ?? "");
       setState(cfg.showPill === false ? "hidden" : "collapsed");
     })
     .catch(() => setState("collapsed"));

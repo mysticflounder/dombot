@@ -1,27 +1,36 @@
 # DomBot
 
-A Chrome extension that puts a collapsible Claude chat panel on every page.
-The model can read the page, and it can change it — text, styles, attributes,
-inserted or removed elements, form values, clicks. Every change it makes is
-saved, and DomBot applies it again each time that page loads.
+A Chrome extension that puts a collapsible chat panel on every page, backed
+by your own **Ollama**. The model can read the page, and it can change it —
+text, styles, attributes, inserted or removed elements, form values, clicks.
+Every change it makes is saved, and DomBot applies it again each time that
+page loads. Nothing leaves your machine except the request to your Ollama.
 
 ```
-page (any tab)                                   Anthropic API
+page (any tab)                                          Ollama (this machine, or one on your LAN)
   ▲  read / change the DOM
   │
-edits.js + dom-tools.js + content.js  ── port ──►  background.js  ── fetch ──►  /v1/messages
-  panel UI, tool execution,                        (service worker)
-  replay of saved changes                          agent loop in agent.js
+edits.js + dom-tools.js + content.js  ── port ──►  background.js  ── fetch ──►  POST /api/chat
+  panel UI, model dropdown,                        (service worker)               GET  /api/tags
+  tool execution, replay on load                   agent loop in agent.js          POST /api/show
 ```
 
 | Piece | Job |
 |---|---|
-| `extension/content.js` | The panel (shadow DOM), runs tools on the page, replays saved changes on load |
+| `extension/content.js` | The panel (shadow DOM), model dropdown, runs tools on the page, replays saved changes on load |
 | `extension/dom-tools.js` | `read_page`, `inspect_dom`, `modify_dom` — the only code that touches the page |
 | `extension/edits.js` | Saved-change records: matching, describing, the `saved_changes` tool |
-| `extension/agent.js` | The Claude call: request shape, SSE stream parsing, the tool loop |
-| `extension/background.js` | Service worker: one conversation per tab, single writer of saved changes |
-| `extension/options.*` | API key, model, effort, and the full list of saved changes |
+| `extension/agent.js` | The Ollama client: request shape, NDJSON stream parsing, the tool loop, model listing |
+| `extension/background.js` | Service worker: one conversation per tab, model cache, single writer of saved changes |
+| `extension/options.*` | The config window: Ollama scheme/host/port, model, thinking, context length, keep-alive, saved changes |
+
+## Requirements
+
+- Chrome 116 or newer.
+- [Ollama](https://ollama.com) running somewhere Chrome can reach, with at
+  least one model that supports **tools** (`ollama show <model>` lists
+  `Capabilities`). Verified with Ollama 0.33.1 and `gemma4`, `qwen3.8`,
+  `nemotron3`.
 
 ## Install
 
@@ -33,22 +42,40 @@ Then in Chrome:
 
 1. `chrome://extensions` → turn on **Developer mode**
 2. **Load unpacked** → pick the `extension/` directory
-3. Click the DomBot toolbar button → **Options**, paste an Anthropic API key,
-   **Test key and model**, **Save**
+3. Open DomBot's settings (⚙ in the panel, or **Details → Extension options**).
+   Check the host and port, **Test connection**, pick a model, **Save**.
 
-`dist/dombot-<version>.zip` is the same directory packaged, for the Web Store
-or for another machine.
+`dist/dombot-<version>.zip` is the same directory packaged, for another
+machine.
+
+## The config window
+
+| Setting | Default | Notes |
+|---|---|---|
+| Scheme / Host / Port | `http` / `localhost` / `11434` | Where Ollama listens. **Test connection** reports its version. |
+| Model | first advertised model with tool support | The dropdown is what `GET /api/tags` returns; models without tool support are greyed out. **Refresh** asks again. The panel header has the same dropdown. |
+| Thinking | model default | `on` / `off` sets `think` on the request. Off is faster. |
+| Context length | 16384 | `options.num_ctx`. Page text plus the tool definitions need room; empty means Ollama's default, which is usually too small. |
+| Keep model loaded | Ollama default (5 min) | `keep_alive`: `10m`, `1h`, `-1` (always), `0` (unload after each reply). |
+| Show the pill on every page | on | Off: only the toolbar button or **Alt+Shift+D** opens the panel. |
+| Extra instructions | — | Appended to the system prompt. |
+
+**Ollama on another machine:** start it with `OLLAMA_HOST=0.0.0.0` so it
+listens on the LAN, and put that machine's address in Host. Ollama's default
+`OLLAMA_ORIGINS` already allows Chrome extensions, so no CORS setting is
+needed.
 
 ## Use
 
 - A **DomBot** pill sits at the bottom right of every page. Click it to open
   the panel; **–** collapses it back to the pill, **×** hides it. The toolbar
   button or **Alt+Shift+D** brings it back.
+- The dropdown in the header switches the model for every tab.
 - Type a request. Enter sends; Shift+Enter makes a new line. **Stop** cancels
   a running reply.
 - **☰** shows the changes saved for this page: turn each one on or off, widen
   it to the whole site, or delete it. **All sites…** opens the full list in the
-  options page.
+  config window.
 - **⟲** starts a new chat. The conversation is per tab and survives page
   navigation in that tab until you clear it or close the tab.
 
@@ -59,6 +86,9 @@ Some things to try:
 - "Hide the cookie banner and the newsletter popup, on every page of this site"
 - "Put a note at the top of the article that says: read later"
 - "Undo the headline change" — DomBot deletes the saved change and reverses it
+
+Local models vary in how well they use tools. If one keeps answering without
+calling a tool, try a larger model or say "use the tools" in the request.
 
 ## Tools the model has
 
@@ -90,18 +120,6 @@ page renders, and again when a single-page app changes the URL.
   want that now.
 - Everything lives in `chrome.storage.local` under the key `edits`.
 
-## Settings
-
-| Setting | Default | Notes |
-|---|---|---|
-| API key | — | Stored in extension storage, plain text |
-| Model | `claude-opus-5` | Any current Messages API model id |
-| Effort | `high` | `low` … `max`; lower is faster and cheaper |
-| Max output tokens | 64000 | A ceiling per reply, not a target |
-| Server-side fallbacks | on | If the model declines a request, the API retries it on Anthropic's recommended fallback model (`fallbacks: "default"`) |
-| Show the pill on every page | on | Off: only the toolbar button or shortcut opens the panel |
-| Extra instructions | — | Appended to the system prompt |
-
 ## Security
 
 - **The model can change any page you open the panel on**, including pages
@@ -109,24 +127,26 @@ page renders, and again when a single-page app changes the URL.
   instructions, but check what it did before you trust a changed page.
 - **Page text is untrusted input.** `read_page` hands the page's words to the
   model. The system prompt tells the model to treat them as data, but a page
-  that contains instructions can still influence it. Do not run DomBot on
-  pages you do not trust.
-- **The API key is in plain text** in this browser profile's extension
-  storage. Anyone who can read the profile can read it.
-- The extension needs access to every site (`<all_urls>`) to draw the panel
-  and run the tools, and to `api.anthropic.com` to talk to Claude. Nothing
-  else leaves the browser.
+  that contains instructions can still influence it — local models more than
+  most. Do not run DomBot on pages you do not trust.
+- The extension needs access to every site (`<all_urls>`) to draw the panel,
+  run the tools, and reach whatever address you give it for Ollama. It talks
+  to nothing else.
 
 ## Development
 
 ```bash
-./scripts/test.sh     # syntax, manifest, unit tests (agent loop with a fake API; DOM tools under jsdom)
+./scripts/test.sh     # syntax, manifest, unit tests, and a live round trip against the local Ollama (skips if absent)
 ./scripts/build.sh    # icons, validation, dist/dombot-<version>.zip
 ```
 
-The tests prove the protocol and the DOM logic. What they cannot prove — the
-panel on real pages, service-worker restarts, replay timing on slow pages — is
-listed in `docs/verify.md`.
+The unit tests prove the loop against recorded Ollama responses
+(`docs/ollama-api.md` is the reference) and the DOM logic under jsdom. The
+live test (`test/ollama.live.test.js`) picks the smallest tool-capable model
+and runs one real tool round trip; `OLLAMA_SKIP_LIVE=1` skips it,
+`OLLAMA_TEST_HOST` / `OLLAMA_TEST_PORT` / `OLLAMA_TEST_MODEL` redirect it.
+What none of that can prove — the panel on real pages, service-worker
+restarts, replay timing — is in `docs/verify.md`.
 
 After editing anything under `extension/`, click **Reload** on
 `chrome://extensions` and reload the page you are testing on.
@@ -143,6 +163,9 @@ After editing anything under `extension/`, click **Reload** on
   delete it or ask DomBot to redo it.
 - **One reply at a time per tab.** Sending while a reply is running is
   refused until you stop it.
+- **Context is finite.** With a small `num_ctx`, Ollama silently drops the
+  oldest part of the conversation. If the model forgets the tools, raise the
+  context length or start a new chat.
 - The service worker forgets in-memory state when Chrome suspends it. The
   conversation is mirrored in session storage and comes back; a tool call
   in flight at that moment fails and the turn ends with an error.

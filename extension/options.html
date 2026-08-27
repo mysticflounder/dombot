@@ -30,13 +30,13 @@
         background: var(--bg);
         margin: 0;
         padding: 24px;
-        max-width: 720px;
+        max-width: 760px;
       }
       h1 { font-size: 18px; margin: 0 0 4px; }
       h2 { font-size: 15px; margin: 28px 0 8px; }
-      .sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
-      label { display: block; font-weight: 600; margin: 16px 0 6px; font-size: 13px; }
-      input[type="text"], input[type="password"], input[type="number"], select, textarea {
+      .sub { color: var(--muted); margin: 0 0 16px; font-size: 13px; }
+      label { display: block; font-weight: 600; margin: 14px 0 6px; font-size: 13px; }
+      input[type="text"], input[type="number"], select, textarea {
         width: 100%;
         box-sizing: border-box;
         padding: 9px 11px;
@@ -47,12 +47,15 @@
         font: inherit;
         font-size: 13px;
       }
-      input[type="password"], input[type="text"].mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      input.mono, select.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
       textarea { min-height: 90px; resize: vertical; }
       input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
       .hint { color: var(--muted); font-size: 12px; margin-top: 5px; }
-      .row { display: flex; gap: 8px; align-items: center; margin-top: 20px; flex-wrap: wrap; }
+      .row { display: flex; gap: 8px; align-items: center; margin-top: 18px; flex-wrap: wrap; }
       .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+      .conn { display: grid; grid-template-columns: 110px 1fr 120px; gap: 0 10px; }
+      .inline { display: flex; gap: 8px; align-items: center; }
+      .inline select { flex: 1; }
       button {
         font: inherit;
         font-weight: 600;
@@ -62,19 +65,22 @@
         background: var(--accent);
         color: #fff;
         cursor: pointer;
+        white-space: nowrap;
       }
       button.secondary { background: transparent; color: var(--fg); border-color: var(--border); }
-      button.small { padding: 3px 10px; font-size: 12px; }
+      button.small { padding: 5px 10px; font-size: 12px; }
       button.danger { background: transparent; color: var(--bad); border-color: var(--bad); }
       button:hover { filter: brightness(1.08); }
-      .checkbox { display: flex; align-items: center; gap: 8px; margin-top: 18px; font-size: 13px; }
+      button:disabled { opacity: .5; cursor: default; }
+      .checkbox { display: flex; align-items: center; gap: 8px; margin-top: 16px; font-size: 13px; }
       .checkbox input { margin: 0; }
       .checkbox label { margin: 0; font-weight: 400; }
       .saved { color: var(--ok); font-size: 12px; font-weight: 600; opacity: 0; transition: opacity .2s; }
       .saved.show { opacity: 1; }
-      .result { font-size: 13px; margin-top: 10px; min-height: 18px; }
-      .result.ok { color: var(--ok); }
-      .result.bad { color: var(--bad); }
+      .status { font-size: 13px; margin-top: 8px; min-height: 18px; }
+      .status.ok { color: var(--ok); }
+      .status.bad { color: var(--bad); }
+      .card { border: 1px solid var(--border); border-radius: 10px; padding: 4px 16px 16px; margin-top: 12px; background: var(--panel); }
       hr { border: 0; border-top: 1px solid var(--border); margin: 28px 0 0; }
       .site { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-top: 10px; }
       .site-head { display: flex; align-items: center; justify-content: space-between; font-weight: 600; margin-bottom: 6px; }
@@ -88,55 +94,80 @@
   </head>
   <body>
     <h1>DomBot</h1>
-    <p class="sub">A Claude chat panel on every page that can read and change the page. Changes are saved here and applied again on every load.</p>
+    <p class="sub">A chat panel on every page, backed by your own Ollama, that can read and change the page. Changes are saved here and applied again on every load.</p>
 
-    <label for="apiKey">Anthropic API key</label>
-    <input type="password" id="apiKey" placeholder="sk-ant-…" spellcheck="false" autocomplete="off" />
-    <div class="hint">Stored in this browser profile's extension storage, in plain text. Anyone with this profile can read it.</div>
+    <div class="card">
+      <h2>Ollama</h2>
+      <div class="conn">
+        <div>
+          <label for="scheme">Scheme</label>
+          <select id="scheme">
+            <option value="http">http</option>
+            <option value="https">https</option>
+          </select>
+        </div>
+        <div>
+          <label for="host">Host</label>
+          <input type="text" id="host" class="mono" placeholder="localhost" spellcheck="false" />
+        </div>
+        <div>
+          <label for="port">Port</label>
+          <input type="number" id="port" class="mono" min="1" max="65535" placeholder="11434" />
+        </div>
+      </div>
+      <div class="hint">
+        Where Ollama listens. On this machine that is <code>http://localhost:11434</code>. For an Ollama on another machine, start it with
+        <code>OLLAMA_HOST=0.0.0.0</code> and use that machine's address here. Ollama accepts requests from Chrome extensions by default (<code>OLLAMA_ORIGINS</code>).
+      </div>
+      <div class="row">
+        <button id="test" class="secondary">Test connection</button>
+        <span class="status" id="connStatus"></span>
+      </div>
 
-    <div class="grid">
-      <div>
-        <label for="model">Model</label>
-        <input type="text" id="model" class="mono" spellcheck="false" />
-        <div class="hint">Default claude-opus-5. Any current Messages API model id works.</div>
+      <label for="model">Model</label>
+      <div class="inline">
+        <select id="model" class="mono"></select>
+        <button id="refresh" class="secondary small" title="Ask Ollama for its model list again">Refresh</button>
       </div>
-      <div>
-        <label for="effort">Effort</label>
-        <select id="effort">
-          <option value="low">low</option>
-          <option value="medium">medium</option>
-          <option value="high">high (default)</option>
-          <option value="xhigh">xhigh</option>
-          <option value="max">max</option>
-        </select>
-        <div class="hint">How hard the model thinks. Lower is faster and cheaper.</div>
-      </div>
-      <div>
-        <label for="maxTokens">Max output tokens</label>
-        <input type="number" id="maxTokens" min="256" max="128000" step="256" />
-        <div class="hint">Ceiling per reply, not a target.</div>
+      <div class="hint" id="modelInfo">The list comes from Ollama's <code>/api/tags</code>. Models that cannot call tools are greyed out; DomBot needs tools.</div>
+
+      <div class="grid">
+        <div>
+          <label for="think">Thinking</label>
+          <select id="think">
+            <option value="default">model default</option>
+            <option value="on">on</option>
+            <option value="off">off</option>
+          </select>
+          <div class="hint">Reasoning before the answer, on models that support it. Off is faster.</div>
+        </div>
+        <div>
+          <label for="numCtx">Context length (num_ctx)</label>
+          <input type="number" id="numCtx" class="mono" min="0" step="1024" placeholder="model default" />
+          <div class="hint">Tokens the model can see. Page text plus tools need room; 16384 is a good floor. Empty = Ollama's default.</div>
+        </div>
+        <div>
+          <label for="keepAlive">Keep model loaded (keep_alive)</label>
+          <input type="text" id="keepAlive" class="mono" placeholder="Ollama default (5m)" spellcheck="false" />
+          <div class="hint">E.g. <code>10m</code>, <code>1h</code>, <code>-1</code> for always, <code>0</code> to unload after each reply.</div>
+        </div>
       </div>
     </div>
 
-    <div class="checkbox">
-      <input type="checkbox" id="fallbacks" />
-      <label for="fallbacks">Server-side fallbacks: if the model declines a request, retry it on Anthropic's recommended fallback model</label>
+    <div class="card">
+      <h2>Panel</h2>
+      <div class="checkbox">
+        <input type="checkbox" id="showPill" />
+        <label for="showPill">Show the DomBot pill on every page (off: use the toolbar button or Alt+Shift+D)</label>
+      </div>
+      <label for="customInstructions">Extra instructions</label>
+      <textarea id="customInstructions" placeholder="Added to the system prompt on every request. Optional."></textarea>
     </div>
-
-    <div class="checkbox">
-      <input type="checkbox" id="showPill" />
-      <label for="showPill">Show the DomBot pill on every page (off: use the toolbar button or Alt+Shift+D)</label>
-    </div>
-
-    <label for="customInstructions">Extra instructions</label>
-    <textarea id="customInstructions" placeholder="Added to the system prompt on every request. Optional."></textarea>
 
     <div class="row">
       <button id="save">Save</button>
-      <button id="test" class="secondary">Test key and model</button>
       <span class="saved" id="savedBadge">Saved</span>
     </div>
-    <div class="result" id="testResult"></div>
 
     <hr />
     <h2>Saved changes</h2>
@@ -147,6 +178,6 @@
     </div>
 
     <script src="edits.js"></script>
-    <script src="options.js"></script>
+    <script type="module" src="options.js"></script>
   </body>
 </html>

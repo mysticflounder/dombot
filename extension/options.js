@@ -1,36 +1,46 @@
+import { baseUrl, listModels, version } from "./agent.js";
+
 const DEFAULTS = {
-  apiKey: "",
-  model: "claude-opus-5",
-  effort: "high",
-  maxTokens: 64000,
-  fallbacks: true,
+  scheme: "http",
+  host: "localhost",
+  port: 11434,
+  model: "",
+  think: "default",
+  numCtx: 16384,
+  keepAlive: "",
   customInstructions: "",
   showPill: true,
 };
 
-const MODELS_URL = "https://api.anthropic.com/v1/models";
-const API_VERSION = "2023-06-01";
-
 const $ = (id) => document.getElementById(id);
+
+function fieldsBase() {
+  return baseUrl({ scheme: $("scheme").value, host: $("host").value, port: $("port").value });
+}
 
 async function load() {
   const cfg = await chrome.storage.local.get(DEFAULTS);
-  $("apiKey").value = cfg.apiKey ?? "";
-  $("model").value = cfg.model || DEFAULTS.model;
-  $("effort").value = cfg.effort || DEFAULTS.effort;
-  $("maxTokens").value = cfg.maxTokens || DEFAULTS.maxTokens;
-  $("fallbacks").checked = cfg.fallbacks !== false;
+  $("scheme").value = cfg.scheme === "https" ? "https" : "http";
+  $("host").value = cfg.host || DEFAULTS.host;
+  $("port").value = cfg.port || DEFAULTS.port;
+  $("think").value = ["default", "on", "off"].includes(cfg.think) ? cfg.think : "default";
+  $("numCtx").value = cfg.numCtx ? cfg.numCtx : "";
+  $("keepAlive").value = cfg.keepAlive ?? "";
   $("showPill").checked = cfg.showPill !== false;
   $("customInstructions").value = cfg.customInstructions ?? "";
+  renderModelOptions([], cfg.model || "");
+  await refreshModels(cfg.model || "");
 }
 
 async function save() {
   await chrome.storage.local.set({
-    apiKey: $("apiKey").value.trim(),
-    model: $("model").value.trim() || DEFAULTS.model,
-    effort: $("effort").value,
-    maxTokens: Math.max(256, Number($("maxTokens").value) || DEFAULTS.maxTokens),
-    fallbacks: $("fallbacks").checked,
+    scheme: $("scheme").value === "https" ? "https" : "http",
+    host: $("host").value.trim() || DEFAULTS.host,
+    port: Number($("port").value) || DEFAULTS.port,
+    model: $("model").value || "",
+    think: $("think").value,
+    numCtx: Number($("numCtx").value) || 0,
+    keepAlive: $("keepAlive").value.trim(),
     showPill: $("showPill").checked,
     customInstructions: $("customInstructions").value,
   });
@@ -39,47 +49,78 @@ async function save() {
   setTimeout(() => badge.classList.remove("show"), 1400);
 }
 
-function showResult(text, ok) {
-  const box = $("testResult");
+function showStatus(text, ok) {
+  const box = $("connStatus");
   box.textContent = text;
-  box.className = `result ${ok ? "ok" : "bad"}`;
+  box.className = `status ${ok ? "ok" : "bad"}`;
 }
 
-/** GET /v1/models/{id} is free: it proves the key and the model id at once. */
-async function testKey() {
-  const apiKey = $("apiKey").value.trim();
-  const model = $("model").value.trim() || DEFAULTS.model;
-  if (!apiKey) {
-    showResult("Enter an API key first.", false);
+async function testConnection() {
+  const base = fieldsBase();
+  showStatus(`Checking ${base}…`, true);
+  try {
+    const v = await version({ base, signal: AbortSignal.timeout(5000) });
+    showStatus(`Ollama ${v} at ${base}`, true);
+  } catch (err) {
+    showStatus(err.message, false);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+function gb(bytes) {
+  return bytes ? `${(bytes / 1e9).toFixed(1)} GB` : "";
+}
+
+let models = [];
+
+function renderModelOptions(list, selected) {
+  models = list;
+  const select = $("model");
+  select.textContent = "";
+  const known = list.some((m) => m.name === selected);
+  if (selected && !known) select.appendChild(new Option(`${selected} (not in Ollama's list)`, selected));
+  for (const m of list) {
+    const opt = new Option(m.tools === false ? `${m.name} — no tools` : m.name, m.name);
+    if (m.tools === false) opt.disabled = true;
+    select.appendChild(opt);
+  }
+  if (!select.options.length) select.appendChild(new Option("no models found", ""));
+  select.value = selected || (list.find((m) => m.tools !== false)?.name ?? list[0]?.name ?? "");
+  describeModel();
+}
+
+function describeModel() {
+  const m = models.find((x) => x.name === $("model").value);
+  const info = $("modelInfo");
+  if (!m) {
+    info.textContent = "The list comes from Ollama's /api/tags. Models that cannot call tools are greyed out; DomBot needs tools.";
     return;
   }
-  showResult("Checking…", true);
+  const parts = [];
+  if (m.family) parts.push(m.family);
+  if (m.parameterSize) parts.push(m.parameterSize);
+  if (m.size) parts.push(gb(m.size));
+  parts.push(m.tools === null ? "tools: unknown" : m.tools ? "tools: yes" : "tools: no");
+  if (m.thinking) parts.push("thinking: yes");
+  info.textContent = parts.join(" · ");
+}
+
+async function refreshModels(selected) {
+  const base = fieldsBase();
+  const btn = $("refresh");
+  btn.disabled = true;
   try {
-    const res = await fetch(`${MODELS_URL}/${encodeURIComponent(model)}`, {
-      headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": API_VERSION,
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-    });
-    if (res.ok) {
-      const info = await res.json();
-      showResult(`Key works. Model: ${info.display_name ?? info.id} (${info.id}).`, true);
-    } else if (res.status === 401) {
-      showResult("The API rejected this key (401).", false);
-    } else if (res.status === 404) {
-      showResult(`The key works, but the API knows no model "${model}" (404).`, false);
-    } else {
-      let detail = "";
-      try {
-        detail = (await res.json())?.error?.message ?? "";
-      } catch {
-        // no JSON body
-      }
-      showResult(`HTTP ${res.status}${detail ? `: ${detail}` : ""}`, false);
-    }
+    const list = await listModels({ base, signal: AbortSignal.timeout(15000) });
+    renderModelOptions(list, selected ?? $("model").value);
+    showStatus(`${list.length} model(s) at ${base}`, true);
   } catch (err) {
-    showResult(`Could not reach the API: ${err.message}`, false);
+    renderModelOptions([], selected ?? $("model").value);
+    showStatus(err.message, false);
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -145,7 +186,9 @@ async function renderEdits() {
 }
 
 $("save").addEventListener("click", save);
-$("test").addEventListener("click", testKey);
+$("test").addEventListener("click", testConnection);
+$("refresh").addEventListener("click", () => refreshModels());
+$("model").addEventListener("change", describeModel);
 $("clearAll").addEventListener("click", async () => {
   if (confirm("Delete every saved change on every site?")) await send({ type: "edits.clear" });
 });

@@ -1,244 +1,293 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  createSseParser,
-  createMessageAccumulator,
-  streamMessage,
-  runTurn,
-  echoableContent,
-  historyItems,
+  baseUrl,
   buildSystem,
   buildRequest,
-  requestHeaders,
-  FALLBACK_BETA,
-  API_URL,
+  toOllamaTools,
+  userContent,
+  userText,
+  createNdjsonParser,
+  createChatAccumulator,
+  streamChat,
+  listModels,
+  version,
+  assistantMessage,
+  runTurn,
+  historyItems,
+  SYSTEM_PROMPT,
 } from "../extension/agent.js";
-import { sseText, turnEvents, streamResponse, jsonResponse, fakeFetch } from "./helpers.js";
+import { ndjson, chatChunks, streamResponse, jsonResponse, fakeFetch } from "./helpers.js";
 
-const SETTINGS = { model: "claude-opus-5", maxTokens: 1000, effort: "high", fallbacks: true };
+const BASE = "http://localhost:11434";
+const SETTINGS = { model: "gemma4:12b-mlx", think: "off", numCtx: 8192, keepAlive: "" };
+const TOOLS = [{ name: "inspect_dom", description: "Find elements", input_schema: { type: "object", properties: { selector: { type: "string" } }, required: ["selector"] } }];
 
-test("sse parser: one character at a time, CRLF, comments, multi-line data", () => {
+test("baseUrl: defaults, pasted URLs, bad ports", () => {
+  assert.equal(baseUrl(), "http://localhost:11434");
+  assert.equal(baseUrl({ host: "10.0.0.5", port: "11434" }), "http://10.0.0.5:11434");
+  assert.equal(baseUrl({ host: " http://10.0.0.5:11434/ ", port: 11434 }), "http://10.0.0.5:11434");
+  assert.equal(baseUrl({ scheme: "https", host: "ollama.lan/api/", port: 443 }), "https://ollama.lan:443");
+  assert.equal(baseUrl({ host: "", port: 99999 }), "http://localhost:11434");
+  assert.equal(baseUrl({ scheme: "ftp", host: "x", port: "abc" }), "http://x:11434");
+});
+
+test("ndjson parser: one character at a time, blank lines, trailing line without newline", () => {
   const got = [];
-  const p = createSseParser((name, data) => got.push([name, data]));
-  const text = 'event: a\r\ndata: {"x":1}\r\n\r\n: keepalive\n\nevent: b\ndata: line1\ndata: line2\n\ndata: tail';
+  const p = createNdjsonParser((o) => got.push(o));
+  const text = '{"a":1}\n\n{"b":"héllo"}\r\n{"c":3}';
   for (const ch of text) p.push(ch);
   p.end();
-  assert.deepEqual(got, [
-    ["a", '{"x":1}'],
-    ["b", "line1\nline2"],
-    ["", "tail"],
-  ]);
+  assert.deepEqual(got, [{ a: 1 }, { b: "héllo" }, { c: 3 }]);
 });
 
-test("accumulator folds deltas into a message with parsed tool input", () => {
-  const acc = createMessageAccumulator();
-  for (const e of turnEvents({ text: "hi there", uses: [{ id: "t1", name: "inspect_dom", input: { selector: "h1", limit: 2 } }], stop: "tool_use" })) {
-    acc.handle(e);
-  }
-  const m = acc.message();
-  assert.equal(m.stop_reason, "tool_use");
-  assert.equal(m.usage.output_tokens, 42);
-  assert.equal(m.usage.input_tokens, 10);
-  assert.deepEqual(m.content[0], { type: "text", text: "hi there" });
-  assert.deepEqual(m.content[1], { type: "tool_use", id: "t1", name: "inspect_dom", input: { selector: "h1", limit: 2 } });
+test("accumulator: thinking, content, tool calls, done stats; error chunk throws", () => {
+  const acc = createChatAccumulator();
+  for (const c of chatChunks({ thinking: "let me see", content: "Hello there", toolCalls: [{ id: "call_1", name: "inspect_dom", arguments: { selector: "h1" } }] })) acc.handle(c);
+  const r = acc.result();
+  assert.equal(r.done, true);
+  assert.equal(r.done_reason, "stop");
+  assert.equal(r.model, "gemma4:12b-mlx");
+  assert.equal(r.message.thinking, "let me see");
+  assert.equal(r.message.content, "Hello there");
+  assert.deepEqual(r.message.tool_calls, [{ id: "call_1", function: { index: 0, name: "inspect_dom", arguments: { selector: "h1" } } }]);
+  assert.equal(r.stats.eval_count, 52);
+  assert.equal(r.stats.prompt_eval_count, 90);
+
+  assert.throws(() => createChatAccumulator().handle({ error: "model 'x' not found" }), /model 'x' not found/);
 });
 
-test("accumulator: an error event throws", () => {
-  const acc = createMessageAccumulator();
-  assert.throws(() => acc.handle({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } }), /Overloaded/);
-});
-
-test("request shape: headers and body with and without fallbacks", () => {
-  const h = requestHeaders("k", { fallbacks: true });
-  assert.equal(h["x-api-key"], "k");
-  assert.equal(h["anthropic-version"], "2023-06-01");
-  assert.equal(h["anthropic-beta"], FALLBACK_BETA);
-  assert.equal(h["anthropic-dangerous-direct-browser-access"], "true");
-  assert.equal(requestHeaders("k", { fallbacks: false })["anthropic-beta"], undefined);
-
-  const body = buildRequest({ model: "m", maxTokens: 5, effort: "low", system: [], tools: [], messages: [], fallbacks: true });
+test("buildRequest: system first, tools in function shape, think/options/keep_alive only when set", () => {
+  const messages = [{ role: "user", content: "hi" }];
+  const body = buildRequest({ model: "m", system: "SYS", tools: TOOLS, messages, numCtx: 4096, think: "on", keepAlive: " 10m " });
+  assert.deepEqual(body.messages[0], { role: "system", content: "SYS" });
+  assert.equal(body.messages[1], messages[0]);
   assert.equal(body.stream, true);
-  assert.equal(body.fallbacks, "default");
-  assert.deepEqual(body.output_config, { effort: "low" });
-  const noFb = buildRequest({ model: "m", maxTokens: 5, system: [], tools: [], messages: [], fallbacks: false });
-  assert.equal("fallbacks" in noFb, false);
-  assert.equal("output_config" in noFb, false);
+  assert.equal(body.think, true);
+  assert.deepEqual(body.options, { num_ctx: 4096 });
+  assert.equal(body.keep_alive, "10m");
+  assert.deepEqual(body.tools, [
+    { type: "function", function: { name: "inspect_dom", description: "Find elements", parameters: TOOLS[0].input_schema } },
+  ]);
+
+  const bare = buildRequest({ model: "m", system: "S", tools: [], messages, think: "default", numCtx: 0, keepAlive: "" });
+  assert.equal("think" in bare, false);
+  assert.equal("options" in bare, false);
+  assert.equal("keep_alive" in bare, false);
+  assert.equal(buildRequest({ model: "m", system: "S", tools: [], messages, think: "off" }).think, false);
+  assert.deepEqual(toOllamaTools(undefined), []);
 });
 
-test("buildSystem: cache breakpoint on the last block, custom instructions appended", () => {
-  const plain = buildSystem("");
-  assert.equal(plain.length, 1);
-  assert.deepEqual(plain[0].cache_control, { type: "ephemeral" });
-  const custom = buildSystem("  Be terse.  ");
-  assert.equal(custom.length, 2);
-  assert.equal(custom[0].cache_control, undefined);
-  assert.equal(custom[1].text, "Be terse.");
-  assert.deepEqual(custom[1].cache_control, { type: "ephemeral" });
+test("buildSystem and the page-context envelope", () => {
+  assert.equal(buildSystem(""), SYSTEM_PROMPT);
+  assert.equal(buildSystem("  Be terse. "), `${SYSTEM_PROMPT}\n\nBe terse.`);
+  const content = userContent({ url: "https://x.test/p", title: "T" }, "make it red");
+  assert.equal(content, "Page URL: https://x.test/p\nPage title: T\n\nmake it red");
+  assert.equal(userText(content), "make it red");
+  assert.equal(userText("plain"), "plain");
+  assert.equal(userText("Page URL: only"), "");
+  assert.equal(userText(42), "");
 });
 
-test("streamMessage: parses a split byte stream and returns the full message", async () => {
-  const fetchImpl = fakeFetch([streamResponse(sseText(turnEvents({ text: "héllo — wörld" })))]);
+test("streamChat: parses a split byte stream and returns the full result", async () => {
+  const fetchImpl = fakeFetch([streamResponse(ndjson(chatChunks({ content: "héllo — wörld" })))]);
   const seen = [];
-  const m = await streamMessage({ apiKey: "k", body: { a: 1 }, fetchImpl, onEvent: (e) => seen.push(e.type) });
-  assert.equal(m.content[0].text, "héllo — wörld");
-  assert.equal(m.stop_reason, "end_turn");
-  assert.ok(seen.includes("message_start") && seen.includes("message_stop"));
-  assert.equal(fetchImpl.calls[0].url, API_URL);
+  const r = await streamChat({ base: BASE, body: { a: 1 }, fetchImpl, onChunk: (c) => seen.push(c) });
+  assert.equal(r.message.content, "héllo — wörld");
+  assert.equal(r.done_reason, "stop");
+  assert.equal(seen.length, 3);
+  assert.equal(fetchImpl.calls[0].url, `${BASE}/api/chat`);
   assert.equal(fetchImpl.calls[0].init.method, "POST");
+  assert.deepEqual(fetchImpl.calls[0].body, { a: 1 });
 });
 
-test("streamMessage: HTTP errors carry the API's message", async () => {
-  const fetchImpl = fakeFetch([jsonResponse({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }, 401)]);
-  await assert.rejects(streamMessage({ apiKey: "bad", body: {}, fetchImpl }), (err) => err.status === 401 && err.message.includes("invalid x-api-key"));
+test("streamChat: HTTP errors carry Ollama's message; connection failures explain themselves", async () => {
+  const notFound = fakeFetch([jsonResponse({ error: "model 'nope:latest' not found" }, 404)]);
+  await assert.rejects(streamChat({ base: BASE, body: {}, fetchImpl: notFound }), (err) => err.status === 404 && err.message.includes("model 'nope:latest' not found"));
+
+  const refused = async () => {
+    throw new TypeError("Failed to fetch");
+  };
+  await assert.rejects(streamChat({ base: BASE, body: {}, fetchImpl: refused }), /Cannot reach Ollama at http:\/\/localhost:11434 \(Failed to fetch\)/);
+
+  const truncated = fakeFetch([streamResponse(ndjson(chatChunks({ content: "partial" }).slice(0, 2)))]);
+  await assert.rejects(streamChat({ base: BASE, body: {}, fetchImpl: truncated }), /ended before the reply was complete/);
 });
 
-test("streamMessage: an error event mid-stream rejects", async () => {
-  const events = turnEvents({ text: "partial" }).slice(0, 3);
-  events.push({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } });
-  const fetchImpl = fakeFetch([streamResponse(sseText(events))]);
-  await assert.rejects(streamMessage({ apiKey: "k", body: {}, fetchImpl }), /Overloaded/);
+test("listModels: tags plus capabilities, sorted by name, tolerant of show failures", async () => {
+  const tags = {
+    models: [
+      { name: "zeta:7b", size: 4e9, details: { family: "llama", parameter_size: "7B" }, modified_at: "t" },
+      { name: "alpha:1b", size: 1e9, details: { family: "gemma", parameter_size: "1B" } },
+      { name: "broken:1b", size: 1e9, details: {} },
+    ],
+  };
+  const fetchImpl = fakeFetch((url, init) => {
+    if (url.endsWith("/api/tags")) return jsonResponse(tags);
+    const { model } = JSON.parse(init.body);
+    if (model === "broken:1b") return jsonResponse({ error: "boom" }, 500);
+    return jsonResponse({ capabilities: model === "zeta:7b" ? ["completion"] : ["completion", "tools", "thinking"] });
+  });
+  const list = await listModels({ base: BASE, fetchImpl });
+  assert.deepEqual(
+    list.map((m) => [m.name, m.tools, m.thinking]),
+    [
+      ["alpha:1b", true, true],
+      ["broken:1b", null, null],
+      ["zeta:7b", false, false],
+    ],
+  );
+  assert.equal(list[0].family, "gemma");
+  assert.equal(list[2].parameterSize, "7B");
+  assert.equal(fetchImpl.calls.filter((c) => c.url.endsWith("/api/show")).length, 3);
+
+  const quick = await listModels({ base: BASE, fetchImpl: fakeFetch([jsonResponse(tags)]), withCapabilities: false });
+  assert.equal(quick.length, 3);
+  assert.equal(quick[0].tools, null);
 });
 
-test("runTurn: tool loop — results go back in one user message, then the final answer", async () => {
+test("version", async () => {
+  assert.equal(await version({ base: BASE, fetchImpl: fakeFetch([jsonResponse({ version: "0.33.1" })]) }), "0.33.1");
+  await assert.rejects(version({ base: BASE, fetchImpl: fakeFetch([jsonResponse({ error: "nope" }, 500)]) }), /answered 500: nope/);
+});
+
+test("assistantMessage keeps only what is there", () => {
+  assert.deepEqual(assistantMessage({ message: { content: "hi", thinking: "", tool_calls: [] } }), { role: "assistant", content: "hi" });
+  const call = { id: "c", function: { name: "x", arguments: {} } };
+  assert.deepEqual(assistantMessage({ message: { content: "", thinking: "hm", tool_calls: [call] } }), { role: "assistant", content: "", thinking: "hm", tool_calls: [call] });
+});
+
+test("runTurn: tool loop — one tool message per call, errors marked, then the final answer", async () => {
   const fetchImpl = fakeFetch([
     streamResponse(
-      sseText(
-        turnEvents({
-          text: "Let me look.",
-          uses: [
-            { id: "t1", name: "inspect_dom", input: { selector: "h1" } },
-            { id: "t2", name: "modify_dom", input: { selector: "h1", action: "set_text", value: "New" } },
+      ndjson(
+        chatChunks({
+          thinking: "plan",
+          content: "Let me look.",
+          toolCalls: [
+            { id: "call_a", name: "inspect_dom", arguments: { selector: "h1" } },
+            { id: "call_b", name: "modify_dom", arguments: { selector: "h1", action: "set_text", value: "New" } },
           ],
-          stop: "tool_use",
         }),
       ),
     ),
-    streamResponse(sseText(turnEvents({ text: "Done." }))),
+    streamResponse(ndjson(chatChunks({ content: "Done." }))),
   ]);
-  const messages = [{ role: "user", content: [{ type: "text", text: "Page URL: x" }, { type: "text", text: "rename the title" }] }];
+  const messages = [{ role: "user", content: userContent({ url: "https://x.test/", title: "X" }, "rename the title") }];
   const toolCalls = [];
   const deltas = [];
   const result = await runTurn({
     messages,
-    tools: [{ name: "inspect_dom" }],
-    system: buildSystem(""),
+    tools: TOOLS,
+    system: "SYS",
     settings: SETTINGS,
-    apiKey: "k",
+    base: BASE,
     fetchImpl,
-    runTool: async (name, input, id) => {
-      toolCalls.push([name, input, id]);
+    runTool: async (name, args, id) => {
+      toolCalls.push([name, args, id]);
       if (name === "modify_dom") throw new Error("boom");
       return { content: "1 element(s) match" };
     },
-    onEvent: (e) => {
-      if (e.type === "content_block_delta" && e.delta.type === "text_delta") deltas.push(e.delta.text);
+    onChunk: (c) => {
+      if (c.message?.content) deltas.push(c.message.content);
     },
   });
 
-  assert.equal(result.stop_reason, "end_turn");
+  assert.equal(result.done_reason, "stop");
+  assert.equal(result.message.content, "Done.");
   assert.equal(deltas.join(""), "Let me look.Done.");
-  assert.deepEqual(
-    toolCalls.map((c) => c[0]),
-    ["inspect_dom", "modify_dom"],
-  );
-  assert.equal(toolCalls[0][2], "t1");
-
-  assert.equal(messages.length, 4);
-  assert.equal(messages[1].role, "assistant");
-  assert.equal(messages[1].content[1].type, "tool_use");
-  assert.equal(messages[2].role, "user");
-  assert.deepEqual(messages[2].content, [
-    { type: "tool_result", tool_use_id: "t1", content: "1 element(s) match" },
-    { type: "tool_result", tool_use_id: "t2", content: "boom", is_error: true },
+  assert.deepEqual(toolCalls, [
+    ["inspect_dom", { selector: "h1" }, "call_a"],
+    ["modify_dom", { selector: "h1", action: "set_text", value: "New" }, "call_b"],
   ]);
-  assert.deepEqual(messages[3], { role: "assistant", content: [{ type: "text", text: "Done." }] });
 
-  // The second request carried the whole history plus tools and system.
+  assert.equal(messages.length, 5);
+  assert.equal(messages[1].role, "assistant");
+  assert.equal(messages[1].thinking, "plan");
+  assert.equal(messages[1].tool_calls.length, 2);
+  assert.deepEqual(messages[2], { role: "tool", content: "1 element(s) match", tool_name: "inspect_dom", tool_call_id: "call_a" });
+  assert.deepEqual(messages[3], { role: "tool", content: "Error: boom", tool_name: "modify_dom", tool_call_id: "call_b" });
+  assert.deepEqual(messages[4], { role: "assistant", content: "Done." });
+
+  // The second request carried system + whole history, tools, and settings.
   const second = fetchImpl.calls[1].body;
-  assert.equal(second.messages.length, 3);
-  assert.equal(second.tools[0].name, "inspect_dom");
-  assert.equal(second.fallbacks, "default");
-  assert.equal(second.stream, true);
-  assert.equal(fetchImpl.calls[1].init.headers["anthropic-beta"], FALLBACK_BETA);
+  assert.equal(second.messages.length, 5);
+  assert.equal(second.messages[0].role, "system");
+  assert.equal(second.model, "gemma4:12b-mlx");
+  assert.equal(second.think, false);
+  assert.deepEqual(second.options, { num_ctx: 8192 });
+  assert.equal(second.tools[0].function.name, "inspect_dom");
 });
 
-test("runTurn: stops on max_tokens without another request", async () => {
-  const fetchImpl = fakeFetch([streamResponse(sseText(turnEvents({ text: "cut", stop: "max_tokens" })))]);
+test("runTurn: string arguments are parsed; a missing id gets no tool_call_id", async () => {
+  const chunks = chatChunks({ toolCalls: [{ name: "inspect_dom", arguments: { selector: "p" } }] });
+  chunks[0].message.tool_calls[0].function.arguments = JSON.stringify({ selector: "p" });
+  delete chunks[0].message.tool_calls[0].id;
+  const fetchImpl = fakeFetch([streamResponse(ndjson(chunks)), streamResponse(ndjson(chatChunks({ content: "ok" })))]);
   const messages = [{ role: "user", content: "hi" }];
-  const result = await runTurn({ messages, tools: [], system: [], settings: SETTINGS, apiKey: "k", fetchImpl, runTool: async () => ({ content: "" }) });
-  assert.equal(result.stop_reason, "max_tokens");
-  assert.equal(fetchImpl.calls.length, 1);
+  const seen = [];
+  await runTurn({ messages, tools: TOOLS, system: "S", settings: SETTINGS, base: BASE, fetchImpl, runTool: async (name, args, id) => (seen.push([name, args, id]), { content: "" }) });
+  assert.deepEqual(seen, [["inspect_dom", { selector: "p" }, undefined]]);
+  assert.deepEqual(messages[2], { role: "tool", content: "(no output)", tool_name: "inspect_dom" });
+});
+
+test("runTurn: done_reason length returns without running tools", async () => {
+  const fetchImpl = fakeFetch([streamResponse(ndjson(chatChunks({ content: "cut", toolCalls: [{ id: "c", name: "inspect_dom", arguments: {} }], doneReason: "length" })))]);
+  let ran = 0;
+  const messages = [{ role: "user", content: "hi" }];
+  const r = await runTurn({ messages, tools: [], system: "S", settings: SETTINGS, base: BASE, fetchImpl, runTool: async () => (ran++, { content: "" }) });
+  assert.equal(r.done_reason, "length");
+  assert.equal(ran, 0);
   assert.equal(messages.length, 2);
 });
 
 test("runTurn: gives up after maxRounds of tool use", async () => {
-  const forever = () => streamResponse(sseText(turnEvents({ uses: [{ id: "t", name: "x", input: {} }], stop: "tool_use" })));
+  const forever = () => streamResponse(ndjson(chatChunks({ toolCalls: [{ id: "c", name: "x", arguments: {} }] })));
   const fetchImpl = fakeFetch([forever, forever, forever]);
   await assert.rejects(
-    runTurn({ messages: [{ role: "user", content: "hi" }], tools: [], system: [], settings: SETTINGS, apiKey: "k", fetchImpl, runTool: async () => ({ content: "ok" }), maxRounds: 2 }),
+    runTurn({ messages: [{ role: "user", content: "hi" }], tools: [], system: "S", settings: SETTINGS, base: BASE, fetchImpl, runTool: async () => ({ content: "ok" }), maxRounds: 2 }),
     /stopped after 2 tool rounds/,
   );
   assert.equal(fetchImpl.calls.length, 2);
 });
 
-test("runTurn: tool_use stop with no tool_use blocks ends the turn cleanly", async () => {
-  const fetchImpl = fakeFetch([streamResponse(sseText(turnEvents({ text: "odd", stop: "tool_use" })))]);
-  const messages = [{ role: "user", content: "hi" }];
-  const result = await runTurn({ messages, tools: [], system: [], settings: SETTINGS, apiKey: "k", fetchImpl, runTool: async () => ({ content: "" }) });
-  assert.equal(result.stop_reason, "tool_use");
-  assert.equal(messages.length, 2);
-});
-
-test("runTurn: an aborted fetch rejects with the AbortError", async () => {
+test("runTurn: an aborted fetch rejects with the AbortError, not a connection error", async () => {
   const controller = new AbortController();
   const fetchImpl = async (_url, init) => {
-    controller.abort();
+    assert.equal(init.signal, controller.signal);
     const err = new Error("aborted");
     err.name = "AbortError";
-    assert.equal(init.signal, controller.signal);
     throw err;
   };
   await assert.rejects(
-    runTurn({ messages: [{ role: "user", content: "hi" }], tools: [], system: [], settings: SETTINGS, apiKey: "k", fetchImpl, signal: controller.signal, runTool: async () => ({}) }),
+    runTurn({ messages: [{ role: "user", content: "hi" }], tools: [], system: "S", settings: SETTINGS, base: BASE, fetchImpl, signal: controller.signal, runTool: async () => ({}) }),
     (err) => err.name === "AbortError",
   );
 });
 
-test("echoableContent: drops non-text before the last fallback marker, the marker, and empty text", () => {
-  const content = [
-    { type: "thinking", thinking: "", signature: "s" },
-    { type: "text", text: "before" },
-    { type: "tool_use", id: "t", name: "x", input: {} },
-    { type: "fallback", from: { model: "a" }, to: { model: "b" } },
-    { type: "text", text: "" },
-    { type: "thinking", thinking: "", signature: "s2" },
-    { type: "text", text: "after" },
-    { type: "tool_use", id: "t2", name: "y", input: {} },
-  ];
-  assert.deepEqual(echoableContent(content), [
-    { type: "text", text: "before" },
-    { type: "thinking", thinking: "", signature: "s2" },
-    { type: "text", text: "after" },
-    { type: "tool_use", id: "t2", name: "y", input: {} },
-  ]);
-  // No fallback: everything but empty text survives, thinking included.
-  const plain = [{ type: "thinking", thinking: "", signature: "s" }, { type: "text", text: "" }, { type: "text", text: "x" }];
-  assert.deepEqual(echoableContent(plain), [plain[0], plain[2]]);
-});
-
-test("historyItems rebuilds the panel view from the API history", () => {
+test("historyItems rebuilds the panel view: prefix stripped, tool rows matched by id then by order", () => {
   const messages = [
-    { role: "user", content: [{ type: "text", text: "Page URL: x" }, { type: "text", text: "hello" }] },
-    { role: "assistant", content: [{ type: "text", text: "Looking." }, { type: "tool_use", id: "t1", name: "inspect_dom", input: { selector: "h1" } }] },
-    { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "1 match", is_error: true }] },
-    { role: "assistant", content: [{ type: "text", text: "Done." }] },
-    { role: "user", content: "plain string" },
+    { role: "user", content: userContent({ url: "u", title: "t" }, "hello") },
+    {
+      role: "assistant",
+      content: "Looking.",
+      tool_calls: [
+        { id: "a", function: { name: "inspect_dom", arguments: { selector: "h1" } } },
+        { id: "b", function: { name: "modify_dom", arguments: { selector: "h1", action: "remove" } } },
+      ],
+    },
+    { role: "tool", content: "Error: no match", tool_name: "modify_dom", tool_call_id: "b" },
+    { role: "tool", content: "1 match", tool_name: "inspect_dom" },
+    { role: "assistant", content: "", tool_calls: [{ function: { name: "read_page", arguments: {} } }] },
+    { role: "tool", content: "text" },
+    { role: "assistant", content: "Done." },
   ];
   assert.deepEqual(historyItems(messages), [
     { kind: "user", text: "hello" },
     { kind: "assistant", text: "Looking." },
-    { kind: "tool", name: "inspect_dom", input: { selector: "h1" }, result: "1 match", is_error: true },
+    { kind: "tool", name: "modify_dom", input: { selector: "h1", action: "remove" }, result: "no match", is_error: true },
+    { kind: "tool", name: "inspect_dom", input: { selector: "h1" }, result: "1 match", is_error: false },
+    { kind: "tool", name: "read_page", input: {}, result: "text", is_error: false },
     { kind: "assistant", text: "Done." },
-    { kind: "user", text: "plain string" },
   ]);
 });

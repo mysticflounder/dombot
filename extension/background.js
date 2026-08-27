@@ -1,28 +1,35 @@
 /**
- * Service worker — owns the conversation per tab, drives the agent loop, and
- * is the single writer of the saved-changes list.
+ * Service worker — owns the conversation per tab, drives the agent loop
+ * against Ollama, and is the single writer of the saved-changes list.
  *
  * MV3 workers are killed after ~30s idle, so: conversations are mirrored to
  * chrome.storage.session, ports from pages reconnect on their own, and a
  * keepalive ticks while a turn is running.
  */
-import { runTurn, buildSystem, historyItems, DEFAULT_MODEL } from "./agent.js";
+import { runTurn, buildSystem, historyItems, userContent, listModels, baseUrl } from "./agent.js";
 
 const PORT_NAME = "dombot";
 const TOOL_TIMEOUT_MS = 60000;
 const KEEPALIVE_MS = 20000;
+const MODELS_CACHE_MS = 60000;
 
 export const DEFAULTS = {
-  apiKey: "",
-  model: DEFAULT_MODEL,
-  effort: "high",
-  maxTokens: 64000,
-  fallbacks: true,
+  scheme: "http",
+  host: "localhost",
+  port: 11434,
+  model: "",
+  think: "default", // default | on | off
+  numCtx: 16384,
+  keepAlive: "",
   customInstructions: "",
   showPill: true,
 };
 
 const log = (...args) => console.log("[dombot]", ...args);
+
+async function getSettings() {
+  return chrome.storage.local.get(DEFAULTS);
+}
 
 // ---------------------------------------------------------------------------
 // Sessions (one per tab)
@@ -47,7 +54,7 @@ function getSession(tabId) {
         port: null,
         busy: false,
         controller: null,
-        pendingTools: new Map(), // tool_use id -> { resolve, reject }
+        pendingTools: new Map(), // tool call id -> { resolve, reject }
       };
     })();
     sessions.set(tabId, p);
@@ -94,24 +101,50 @@ function turnEnded() {
 }
 
 // ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+let modelsCache = { base: "", at: 0, list: null };
+
+async function getModels({ force = false } = {}) {
+  const settings = await getSettings();
+  const base = baseUrl(settings);
+  if (!force && modelsCache.list && modelsCache.base === base && Date.now() - modelsCache.at < MODELS_CACHE_MS) {
+    return modelsCache.list;
+  }
+  const list = await listModels({ base });
+  modelsCache = { base, at: Date.now(), list };
+  return list;
+}
+
+/** The configured model, or the first advertised one (saved for next time). */
+async function resolveModel(settings) {
+  if (settings.model) return settings.model;
+  const models = await getModels();
+  const pick = models.find((m) => m.tools !== false) ?? models[0];
+  if (!pick) throw new Error("Ollama advertises no models. Pull one first, e.g. `ollama pull qwen3`.");
+  await chrome.storage.local.set({ model: pick.name });
+  return pick.name;
+}
+
+// ---------------------------------------------------------------------------
 // The turn
 // ---------------------------------------------------------------------------
 
-function pageContext(page) {
-  return `Page URL: ${page?.url ?? "(unknown)"}\nPage title: ${page?.title ?? ""}`;
-}
+let toolCallCounter = 0;
 
-function askTool(s, use) {
+function askTool(s, call) {
   return new Promise((resolve, reject) => {
     if (!s.port) {
       reject(new Error("the page is not connected"));
       return;
     }
+    const id = call.id || `local_${++toolCallCounter}`;
     const timer = setTimeout(() => {
-      s.pendingTools.delete(use.id);
-      resolve({ content: `${use.name} did not answer within ${TOOL_TIMEOUT_MS / 1000}s`, is_error: true });
+      s.pendingTools.delete(id);
+      resolve({ content: `${call.name} did not answer within ${TOOL_TIMEOUT_MS / 1000}s`, is_error: true });
     }, TOOL_TIMEOUT_MS);
-    s.pendingTools.set(use.id, {
+    s.pendingTools.set(id, {
       resolve: (r) => {
         clearTimeout(timer);
         resolve(r);
@@ -121,7 +154,7 @@ function askTool(s, use) {
         reject(e);
       },
     });
-    post(s, { type: "tool_use", id: use.id, name: use.name, input: use.input });
+    post(s, { type: "tool_use", id, name: call.name, input: call.input });
   });
 }
 
@@ -130,65 +163,58 @@ async function startTurn(s, msg) {
     post(s, { type: "error", message: "Still working on the last message. Stop it first, or wait." });
     return;
   }
-  const settings = await chrome.storage.local.get(DEFAULTS);
-  if (!settings.apiKey) {
-    post(s, { type: "error", message: "No API key yet. Open DomBot's settings and add one.", needsKey: true });
-    return;
-  }
+  const settings = await getSettings();
+  const base = baseUrl(settings);
 
   s.busy = true;
   s.controller = new AbortController();
   turnStarted();
 
-  s.messages.push({
-    role: "user",
-    content: [
-      { type: "text", text: pageContext(msg.page) },
-      { type: "text", text: msg.text },
-    ],
-  });
+  s.messages.push({ role: "user", content: userContent(msg.page, msg.text) });
   await persist(s);
   post(s, { type: "turn_start" });
 
+  let textStarted = false;
+  let thinkingShown = false;
   try {
+    const model = await resolveModel(settings);
+    post(s, { type: "status", text: `waiting for ${model}…` });
     const result = await runTurn({
       messages: s.messages,
       tools: s.tools,
       system: buildSystem(settings.customInstructions),
-      settings: {
-        model: settings.model || DEFAULT_MODEL,
-        maxTokens: Number(settings.maxTokens) || DEFAULTS.maxTokens,
-        effort: settings.effort || undefined,
-        fallbacks: settings.fallbacks !== false,
-      },
-      apiKey: settings.apiKey,
+      settings: { model, numCtx: settings.numCtx, think: settings.think, keepAlive: settings.keepAlive },
+      base,
       signal: s.controller.signal,
       runTool: (name, input, id) => askTool(s, { id, name, input }),
-      onEvent: (event) => {
-        if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
-          post(s, { type: "delta", text: event.delta.text });
-        } else if (event.type === "content_block_start") {
-          const t = event.content_block?.type;
-          if (t === "text") post(s, { type: "text_start" });
-          else if (t === "thinking") post(s, { type: "status", text: "thinking…" });
-          else if (t === "fallback") post(s, { type: "status", text: "switched to a fallback model" });
+      onChunk: (chunk) => {
+        const m = chunk.message;
+        if (!m) return;
+        if (m.thinking && !thinkingShown) {
+          thinkingShown = true;
+          post(s, { type: "status", text: "thinking…" });
+        }
+        if (m.content) {
+          if (!textStarted) {
+            textStarted = true;
+            post(s, { type: "text_start" });
+          }
+          post(s, { type: "delta", text: m.content });
+        }
+        if (chunk.done) {
+          textStarted = false;
+          thinkingShown = false;
         }
       },
       onAssistantMessage: () => persist(s),
     });
-    post(s, {
-      type: "turn_end",
-      stopReason: result.stop_reason,
-      stopDetails: result.stop_details ?? null,
-      model: result.model,
-      usage: result.usage ?? null,
-    });
+    post(s, { type: "turn_end", stopReason: result.done_reason, model: result.model, stats: result.stats });
   } catch (err) {
     if (err?.name === "AbortError") {
       post(s, { type: "turn_end", stopReason: "cancelled" });
     } else {
       log("turn failed", err);
-      post(s, { type: "error", message: err?.message ?? String(err) });
+      post(s, { type: "error", message: err?.message ?? String(err), needsSetup: true });
     }
   } finally {
     s.busy = false;
@@ -294,6 +320,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       chrome.runtime.openOptionsPage();
       sendResponse({ ok: true });
       return false;
+    case "models.list":
+      return reply(getModels({ force: Boolean(msg.force) }));
     case "edits.add":
       if (!validEdit(msg.edit)) {
         sendResponse({ ok: false, error: "malformed edit" });
@@ -311,6 +339,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     default:
       return false;
   }
+});
+
+// Settings changes invalidate the model cache (host/port may have moved).
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && (changes.scheme || changes.host || changes.port)) modelsCache = { base: "", at: 0, list: null };
 });
 
 // ---------------------------------------------------------------------------

@@ -1,48 +1,49 @@
-/** Shared fakes for the agent tests: SSE text builders and a fake fetch. */
+/** Shared fakes for the agent tests: Ollama NDJSON builders and a fake fetch. */
 
-export function sseText(events) {
-  return events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join("");
+export function ndjson(objects) {
+  return objects.map((o) => JSON.stringify(o)).join("\n") + "\n";
 }
 
-function messageStart(model) {
-  return {
-    type: "message_start",
-    message: { id: "msg_1", type: "message", role: "assistant", model, content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 1 } },
-  };
+function half(s) {
+  const mid = Math.floor(s.length / 2);
+  return [s.slice(0, mid), s.slice(mid)].filter((x) => x.length);
 }
 
-/** Events for an assistant turn: optional text, then tool_use blocks. */
-export function turnEvents({ text = null, uses = [], stop = "end_turn", model = "claude-opus-5", extraBlocks = [] } = {}) {
-  const events = [messageStart(model)];
-  let index = 0;
-  for (const block of extraBlocks) {
-    events.push({ type: "content_block_start", index, content_block: block });
-    events.push({ type: "content_block_stop", index });
-    index++;
-  }
-  if (text !== null) {
-    events.push({ type: "content_block_start", index, content_block: { type: "text", text: "" } });
-    const mid = Math.floor(text.length / 2);
-    events.push({ type: "content_block_delta", index, delta: { type: "text_delta", text: text.slice(0, mid) } });
-    events.push({ type: "content_block_delta", index, delta: { type: "text_delta", text: text.slice(mid) } });
-    events.push({ type: "content_block_stop", index });
-    index++;
-  }
-  for (const use of uses) {
-    events.push({ type: "content_block_start", index, content_block: { type: "tool_use", id: use.id, name: use.name, input: {} } });
-    const json = JSON.stringify(use.input);
-    const mid = Math.floor(json.length / 2);
-    events.push({ type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: json.slice(0, mid) } });
-    events.push({ type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: json.slice(mid) } });
-    events.push({ type: "content_block_stop", index });
-    index++;
-  }
-  events.push({ type: "message_delta", delta: { stop_reason: stop, stop_sequence: null }, usage: { output_tokens: 42 } });
-  events.push({ type: "message_stop" });
-  return events;
+/**
+ * Chunks for one assistant reply, shaped like Ollama 0.33 streams them:
+ * thinking deltas, content deltas, one chunk per tool call, then the done
+ * chunk with stats.
+ */
+export function chatChunks({ model = "gemma4:12b-mlx", thinking = "", content = "", toolCalls = [], doneReason = "stop" } = {}) {
+  const at = "2026-08-27T19:40:23.883809Z";
+  const chunks = [];
+  for (const piece of half(thinking)) chunks.push({ model, created_at: at, message: { role: "assistant", content: "", thinking: piece }, done: false });
+  for (const piece of half(content)) chunks.push({ model, created_at: at, message: { role: "assistant", content: piece }, done: false });
+  toolCalls.forEach((call, index) => {
+    chunks.push({
+      model,
+      created_at: at,
+      message: { role: "assistant", content: "", tool_calls: [{ id: call.id, function: { index, name: call.name, arguments: call.arguments } }] },
+      done: false,
+    });
+  });
+  chunks.push({
+    model,
+    created_at: at,
+    message: { role: "assistant", content: "" },
+    done: true,
+    done_reason: doneReason,
+    total_duration: 3859887041,
+    load_duration: 1834756833,
+    prompt_eval_count: 90,
+    prompt_eval_duration: 934746292,
+    eval_count: 52,
+    eval_duration: 881612375,
+  });
+  return chunks;
 }
 
-/** A Response whose body arrives in small byte chunks, so multi-byte characters and SSE frames get split. */
+/** A Response whose body arrives in small byte chunks, so multi-byte characters and lines get split. */
 export function streamResponse(text, { status = 200, chunk = 7 } = {}) {
   const bytes = new TextEncoder().encode(text);
   const body = new ReadableStream({
@@ -51,20 +52,24 @@ export function streamResponse(text, { status = 200, chunk = 7 } = {}) {
       controller.close();
     },
   });
-  return new Response(body, { status, headers: { "content-type": "text/event-stream" } });
+  return new Response(body, { status, headers: { "content-type": "application/x-ndjson" } });
 }
 
-export function jsonResponse(obj, status) {
+export function jsonResponse(obj, status = 200) {
   return new Response(JSON.stringify(obj), { status, headers: { "content-type": "application/json" } });
 }
 
-/** fetch stand-in that hands out `responses` in order and records every request. */
+/** fetch stand-in: `responses` is an array (in order) or a function (url, init) => Response. Records every request. */
 export function fakeFetch(responses) {
   const calls = [];
-  const fn = async (url, init) => {
-    calls.push({ url, init, body: JSON.parse(init.body) });
-    const next = responses.shift();
-    if (!next) throw new Error("fakeFetch: no more responses");
+  const fn = async (url, init = {}) => {
+    calls.push({ url, init, body: init.body ? JSON.parse(init.body) : null });
+    let next;
+    if (typeof responses === "function") next = responses(url, init);
+    else {
+      next = responses.shift();
+      if (!next) throw new Error("fakeFetch: no more responses");
+    }
     return typeof next === "function" ? next(init) : next;
   };
   fn.calls = calls;

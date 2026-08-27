@@ -2,26 +2,32 @@
   "manifest_version": 3,
   "name": "DomBot",
   "version": "0.1.0",
-  "description": "A collapsible Claude chat panel on every page, with tools that read and change the page. Changes are saved and applied again on every load.",
+  "description": "A collapsible chat panel on every page, backed by your own Ollama, with tools that read and change the page. Changes are saved and applied again on every load.",
   "minimum_chrome_version": "116",
-
-  "permissions": ["storage"],
-  "host_permissions": ["https://api.anthropic.com/*"],
-
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
-
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["edits.js", "dom-tools.js", "content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "edits.js",
+        "dom-tools.js",
+        "content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     }
   ],
-
   "action": {
     "default_title": "DomBot — show or hide the chat panel",
     "default_icon": {
@@ -31,19 +37,18 @@
       "128": "icons/icon-128.png"
     }
   },
-
   "options_ui": {
     "page": "options.html",
     "open_in_tab": true
   },
-
   "commands": {
     "toggle-panel": {
-      "suggested_key": { "default": "Alt+Shift+D" },
+      "suggested_key": {
+        "default": "Alt+Shift+D"
+      },
       "description": "Show or hide the DomBot panel"
     }
   },
-
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
