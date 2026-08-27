@@ -9,7 +9,7 @@ are saved per page and applied again on every load.
 ```
 extension/     What Chrome loads: manifest, service worker, content scripts, options page, icons
   agent.js       ES module. The Ollama client: request shape, NDJSON parsing, tool loop, model list. No Chrome APIs.
-  background.js  ES module service worker. Sessions per tab, model cache, saved-change writes, toolbar toggle.
+  background.js  ES module service worker. Sessions per tab, model cache, Origin-header rules, saved-change writes, toolbar toggle.
   edits.js       Classic script. Saved-change records: matching, describing, the saved_changes tool.
   dom-tools.js   Classic script. read_page / inspect_dom / modify_dom. The only code that touches the page.
   content.js     Classic script. The panel (closed shadow DOM), model dropdown, tool execution, replay on load.
@@ -53,6 +53,13 @@ docs/          ollama-api.md (observed wire format), verify.md (live checks), po
   flag on tool messages.
 - **Chrome rejects files whose names start with `_`.** `node_modules` stays
   outside `extension/` for that reason; `build.sh` checks.
+- **Ollama answers 403 to `chrome-extension://` origins**, and Chrome puts
+  that `Origin` on every POST the extension sends (not on GETs, so Test
+  connection passes while chat fails). `background.js` keeps two dynamic
+  `declarativeNetRequest` rules from `originRule` in `agent.js` that remove
+  the header on `<base>/api/`: the saved base, and the base the options page
+  is probing. The `declarativeNetRequestWithHostAccess` permission exists for
+  this. Details and the observed table: `docs/ollama-api.md` → Origins.
 
 ## Conventions
 

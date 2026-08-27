@@ -5,7 +5,8 @@
   "description": "A collapsible chat panel on every page, backed by your own Ollama, with tools that read and change the page. Changes are saved and applied again on every load.",
   "minimum_chrome_version": "116",
   "permissions": [
-    "storage"
+    "storage",
+    "declarativeNetRequestWithHostAccess"
   ],
   "host_permissions": [
     "<all_urls>"

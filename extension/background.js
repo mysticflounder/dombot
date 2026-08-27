@@ -6,7 +6,7 @@
  * chrome.storage.session, ports from pages reconnect on their own, and a
  * keepalive ticks while a turn is running.
  */
-import { runTurn, buildSystem, historyItems, userContent, listModels, baseUrl } from "./agent.js";
+import { runTurn, buildSystem, historyItems, userContent, listModels, baseUrl, originRule } from "./agent.js";
 
 const PORT_NAME = "dombot";
 const TOOL_TIMEOUT_MS = 60000;
@@ -126,6 +126,31 @@ async function resolveModel(settings) {
   await chrome.storage.local.set({ model: pick.name });
   return pick.name;
 }
+
+// ---------------------------------------------------------------------------
+// Origin header
+//
+// Ollama answers 403 when Origin is chrome-extension://…, and Chrome puts
+// that on every POST this worker sends. Two dynamic declarativeNetRequest
+// rules remove the header: one for the saved base, one for whatever base the
+// options page is probing before Save. Dynamic rules survive worker restarts.
+// ---------------------------------------------------------------------------
+
+const ORIGIN_RULE_SAVED = 1;
+const ORIGIN_RULE_PROBE = 2;
+
+async function allowOrigin(id, settings) {
+  const rule = originRule({ id, base: baseUrl(settings) });
+  await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [id], addRules: [rule] });
+}
+
+function allowSavedOrigin() {
+  return getSettings()
+    .then((s) => allowOrigin(ORIGIN_RULE_SAVED, s))
+    .catch((err) => log("origin rule failed", err?.message ?? err));
+}
+
+allowSavedOrigin();
 
 // ---------------------------------------------------------------------------
 // The turn
@@ -322,6 +347,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return false;
     case "models.list":
       return reply(getModels({ force: Boolean(msg.force) }));
+    case "origin.allow":
+      return reply(allowOrigin(ORIGIN_RULE_PROBE, { scheme: msg.scheme, host: msg.host, port: msg.port }));
     case "edits.add":
       if (!validEdit(msg.edit)) {
         sendResponse({ ok: false, error: "malformed edit" });
@@ -341,9 +368,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 });
 
-// Settings changes invalidate the model cache (host/port may have moved).
+// Settings changes invalidate the model cache and move the Origin rule (host/port may have moved).
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && (changes.scheme || changes.host || changes.port)) modelsCache = { base: "", at: 0, list: null };
+  if (area === "local" && (changes.scheme || changes.host || changes.port)) {
+    modelsCache = { base: "", at: 0, list: null };
+    allowSavedOrigin();
+  }
 });
 
 // ---------------------------------------------------------------------------

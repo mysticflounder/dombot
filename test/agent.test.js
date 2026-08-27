@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   baseUrl,
+  originRule,
   buildSystem,
   buildRequest,
   toOllamaTools,
@@ -290,4 +291,15 @@ test("historyItems rebuilds the panel view: prefix stripped, tool rows matched b
     { kind: "tool", name: "read_page", input: {}, result: "text", is_error: false },
     { kind: "assistant", text: "Done." },
   ]);
+});
+
+test("originRule: removes Origin on the configured base only, canonical URL", () => {
+  const r = originRule({ id: 1, base: "http://10.0.0.20:11434" });
+  assert.equal(r.id, 1);
+  assert.deepEqual(r.action, { type: "modifyHeaders", requestHeaders: [{ header: "origin", operation: "remove" }] });
+  assert.equal(r.condition.urlFilter, "|http://10.0.0.20:11434/api/");
+  assert.deepEqual(r.condition.resourceTypes, ["xmlhttprequest"]);
+  assert.equal(originRule({ id: 2, base: "http://Ollama.LAN:80" }).condition.urlFilter, "|http://ollama.lan/api/");
+  assert.equal(originRule({ id: 2, base: "https://ollama.lan:443" }).condition.urlFilter, "|https://ollama.lan/api/");
+  assert.equal(originRule({ id: 2, base: baseUrl() }).condition.urlFilter, "|http://localhost:11434/api/");
 });

@@ -9,13 +9,13 @@ jsdom. These checks need real Chrome.
 1. `./scripts/build.sh`, then `chrome://extensions` → Load unpacked → `extension/`.
 2. Open the config window (⚙ in the panel, or Details → Extension options).
    **Test connection** reports `Ollama <version> at http://localhost:11434 — <n> model(s)` and the Model dropdown fills in without pressing **Refresh**.
-3. The Model dropdown lists what `ollama list` shows; models without tool support are greyed out. Pick one, **Save**.
+3. The Model dropdown lists what `ollama list` shows; models without tool support are greyed out. The line under the dropdown says `tools: yes` or `tools: no`, never `tools: unknown` — that proves the Origin rule covers `POST /api/show`. Pick one, **Save**.
 4. Set Host to a wrong address, **Test connection**: the error names the address and says to check host/port, and the Model dropdown keeps its list (the version check fails first, so no refresh runs). Set it back.
 5. Open any https page. The **DomBot** pill is at the bottom right. Click it: the panel opens, and the header dropdown shows the same models.
 
 ## Chat and tools
 
-6. Ask "what is this page about?" — the status shows `waiting for <model>…`, then text streams in, and a `read_page` row appears above the answer.
+6. Ask "what is this page about?" — the status shows `waiting for <model>…`, then text streams in, and a `read_page` row appears above the answer. A `403` here means the Origin rule did not apply; see `docs/ollama-api.md` → Origins.
 7. Ask "make the first h1 red" — a `modify_dom` row shows `→ set_style: changed 1 element(s)…` and ` · saved`. The heading is red.
 8. Reload the page. The heading is red again without any chat. ☰ lists the change.
 9. Turn the change off in ☰, reload: the heading is back to normal. Turn it on, reload: red again.

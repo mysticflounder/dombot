@@ -61,9 +61,14 @@ machine.
 | Extra instructions | — | Appended to the system prompt. |
 
 **Ollama on another machine:** start it with `OLLAMA_HOST=0.0.0.0` so it
-listens on the LAN, and put that machine's address in Host. Ollama's default
-`OLLAMA_ORIGINS` already allows Chrome extensions, so no CORS setting is
-needed.
+listens on the LAN, and put that machine's address in Host.
+
+**No `OLLAMA_ORIGINS` setting is needed.** Ollama answers 403 to any request
+whose `Origin` is a `chrome-extension://` URL, and Chrome puts that header on
+every POST an extension sends. DomBot removes the header on its own requests
+to the configured host with a `declarativeNetRequest` rule — that is what the
+`declarativeNetRequestWithHostAccess` permission is for. No other request in
+the browser is touched.
 
 ## Use
 

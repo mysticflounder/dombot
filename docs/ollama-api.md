@@ -64,7 +64,24 @@ dropdown.
 
 ## Origins
 
-Ollama's default `OLLAMA_ORIGINS` already allows `chrome-extension://*`, so
-requests from the service worker work without configuration. For an Ollama
-on another machine, start it with `OLLAMA_HOST=0.0.0.0` so it listens on the
+Observed on 0.33.1 with `curl -H "Origin: …"`, same result on `/api/tags`,
+`/api/show` and `/api/chat`:
+
+| `Origin` header | Answer |
+|---|---|
+| none | 200 |
+| `http://localhost` | 200 |
+| `chrome-extension://<id>` | **403**, empty body |
+
+The default `OLLAMA_ORIGINS` does **not** include `chrome-extension://*`.
+Chrome puts `Origin: chrome-extension://<id>` on the extension's POST
+requests and not on its GETs, which is why **Test connection** (`GET
+/api/version`) and the model list (`GET /api/tags`) pass while capabilities
+(`POST /api/show`) and chat (`POST /api/chat`) fail with 403.
+
+`background.js` keeps two dynamic `declarativeNetRequest` rules, built by
+`originRule` in `agent.js`, that remove the `Origin` header on requests to
+`<base>/api/`: one for the saved base, one for the base the options page is
+probing before Save. No Ollama configuration is needed. For an Ollama on
+another machine, start it with `OLLAMA_HOST=0.0.0.0` so it listens on the
 LAN.

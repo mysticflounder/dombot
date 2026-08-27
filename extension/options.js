@@ -18,6 +18,12 @@ function fieldsBase() {
   return baseUrl({ scheme: $("scheme").value, host: $("host").value, port: $("port").value });
 }
 
+// The worker removes the Origin header on requests to this base (Ollama
+// answers 403 to chrome-extension:// origins); tell it which base we probe.
+function allowFields() {
+  return send({ type: "origin.allow", scheme: $("scheme").value, host: $("host").value, port: $("port").value });
+}
+
 async function load() {
   const cfg = await chrome.storage.local.get(DEFAULTS);
   $("scheme").value = cfg.scheme === "https" ? "https" : "http";
@@ -60,6 +66,7 @@ async function testConnection() {
   const btn = $("test");
   btn.disabled = true;
   showStatus(`Checking ${base}…`, true);
+  await allowFields();
   try {
     const v = await version({ base, signal: AbortSignal.timeout(5000) });
     showStatus(`Ollama ${v} at ${base} — loading models…`, true);
@@ -121,6 +128,7 @@ async function refreshModels(selected, { quiet = false } = {}) {
   const base = fieldsBase();
   const btn = $("refresh");
   btn.disabled = true;
+  await allowFields();
   try {
     const list = await listModels({ base, signal: AbortSignal.timeout(15000) });
     renderModelOptions(list, selected ?? $("model").value);

@@ -51,6 +51,24 @@ export function baseUrl({ scheme = DEFAULT_SCHEME, host = DEFAULT_HOST, port = D
   return `${s}://${h}:${portPart}`;
 }
 
+/**
+ * Ollama answers 403 to any request whose Origin is a chrome-extension://
+ * URL (observed on 0.33.1; its allow-list covers localhost, app://, file://,
+ * vscode-*, and whatever OLLAMA_ORIGINS adds). Chrome puts that header on
+ * every POST the extension sends, so /api/chat and /api/show fail while the
+ * GETs pass. The fix is a declarativeNetRequest rule that removes the header
+ * on requests to the configured base; this builds it. Pure, so it is tested.
+ */
+export function originRule({ id, base }) {
+  const u = new URL(base); // canonical: lowercase host, default port dropped
+  return {
+    id,
+    priority: 1,
+    action: { type: "modifyHeaders", requestHeaders: [{ header: "origin", operation: "remove" }] },
+    condition: { urlFilter: `|${u.origin}/api/`, isUrlFilterCaseSensitive: false, resourceTypes: ["xmlhttprequest"] },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Request shaping
 // ---------------------------------------------------------------------------
