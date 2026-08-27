@@ -39,3 +39,4 @@ jsdom. These checks need real Chrome.
 21. A page with strict CSP (e.g. github.com): the panel renders and styles apply.
 22. A page enforcing Trusted Types (e.g. a Google property): `insert_html` reports an error to the model; `set_style` and `set_text` still work.
 23. A page with global keyboard shortcuts (e.g. GitHub's `s`, Gmail's `c`): typing in the panel does not trigger them.
+24. With the OS in dark mode, on a light page (e.g. example.com): the header model dropdown and the scope dropdown in ☰ open as dark lists with readable text. Switch the OS to light mode: both are light with dark text.

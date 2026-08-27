@@ -21,12 +21,13 @@
 :host { all: initial; }
 * { box-sizing: border-box; }
 .root {
+  color-scheme: light;
   --fg: #16181c; --muted: #6b7280; --bg: #ffffff; --panel: #f5f6f7; --border: #d9dde2;
   --accent: #d97757; --accent-fg: #ffffff; --user: #e8f0fe; --bad: #c62828; --ok: #1b8a4c; --code: #eef0f2;
   font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; color: var(--fg);
 }
 @media (prefers-color-scheme: dark) {
-  .root { --fg: #e7e9ea; --muted: #9aa0a6; --bg: #1f2023; --panel: #2a2b2f; --border: #3b3d42; --user: #2c3e5a; --code: #151618; }
+  .root { color-scheme: dark; --fg: #e7e9ea; --muted: #9aa0a6; --bg: #1f2023; --panel: #2a2b2f; --border: #3b3d42; --user: #2c3e5a; --code: #151618; }
 }
 .pill { display: none; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px; background: var(--accent); color: var(--accent-fg); font: inherit; font-weight: 600; border: 0; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
 .root.collapsed .pill { display: flex; }
@@ -36,6 +37,7 @@
 .title { font-weight: 700; margin-right: 6px; }
 .model { flex: 1; min-width: 0; max-width: 150px; font: inherit; font-size: 11px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 2px 4px; cursor: pointer; }
 .model:hover, .model:focus { border-color: var(--border); color: var(--fg); outline: none; }
+.model option, .saved-row select option { background: var(--bg); color: var(--fg); }
 .icon { border: 0; background: transparent; color: var(--fg); cursor: pointer; font: inherit; font-size: 14px; padding: 2px 6px; border-radius: 6px; line-height: 1; }
 .icon:hover, .icon.active { background: var(--border); }
 .body { display: none; flex: 1; min-height: 0; flex-direction: column; }
