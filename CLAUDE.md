@@ -1,6 +1,6 @@
 # DomBot
 
-Chrome (MV3) extension: a collapsible chat panel on every page, backed by
+Browser extension (Chrome MV3): a collapsible chat panel on every page, backed by
 the user's Ollama, with tools that read and change the page's DOM. Changes
 are saved per page and applied again on every load.
 

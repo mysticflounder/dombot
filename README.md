@@ -1,10 +1,47 @@
 # DomBot
 
-A Chrome extension that puts a collapsible chat panel on every page, backed
+A browser extension that puts a collapsible chat panel on every page, backed
 by your own **Ollama**. The model can read the page, and it can change it —
 text, styles, attributes, inserted or removed elements, form values, clicks.
 Every change it makes is saved, and DomBot applies it again each time that
-page loads. Nothing leaves your machine except the request to your Ollama.
+page loads. Nothing leaves your browser except the requests to your Ollama —
+but read the next section before you install it.
+
+## ⚠️ This is probably a terrible idea
+
+DomBot hands a language model the keys to your browser. Understand what that
+means before you load it:
+
+- **The model can act as you, on every site.** The host permission is
+  `<all_urls>`. `modify_dom` clicks buttons, types into fields, submits
+  forms, and rewrites any page you are logged into — your bank, your mail,
+  your admin consoles. There is no confirmation step. A wrong answer from
+  the model becomes a click.
+- **Every page you open is a prompt-injection surface.** Page text goes to
+  the model as tool output. Text on a page — visible or not — can tell the
+  model to do things. The system prompt says page text is data, not
+  instructions; that is advice to the model, not enforcement. A hostile page
+  can, in principle, steer the model into clicking something, or into
+  leaking what it read (`insert_html` with an `<img src="https://…?…">` is
+  enough).
+- **Saved changes replay without asking.** Whatever the model persisted runs
+  again on every load of that page or site — including `set_html` and
+  `insert_html` with arbitrary markup — until you delete it in ☰ or the
+  config window.
+- **Your browsing goes to Ollama in plain HTTP.** Page text and titles are
+  sent to the configured host. With Ollama on another machine that is
+  unencrypted LAN traffic to an unauthenticated server that anyone else on
+  the network can also talk to.
+- **The `Origin` header is removed on requests to your Ollama host**, so
+  Ollama's own CORS check no longer keeps this extension out.
+- **The content script runs on every page.** A bug in it is a bug on every
+  site. The panel lives in a closed shadow root, which hides it from the
+  page's scripts; that is a speed bump, not a security boundary — the page
+  can still remove the host element or watch it.
+
+Use a separate browser profile with no logins you care about, or a throwaway
+browser. Do not install it in the profile you bank from. You have been
+warned.
 
 ```
 page (any tab)                                          Ollama (this machine, or one on your LAN)
@@ -174,3 +211,8 @@ After editing anything under `extension/`, click **Reload** on
 - The service worker forgets in-memory state when Chrome suspends it. The
   conversation is mirrored in session storage and comes back; a tool call
   in flight at that moment fails and the turn ends with an error.
+
+## License
+
+DomBot is free software under the GNU General Public License, version 3
+(the latest GPL). See [LICENSE](LICENSE).

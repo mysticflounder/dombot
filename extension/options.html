@@ -117,7 +117,7 @@
       </div>
       <div class="hint">
         Where Ollama listens. On this machine that is <code>http://localhost:11434</code>. For an Ollama on another machine, start it with
-        <code>OLLAMA_HOST=0.0.0.0</code> and use that machine's address here. Ollama accepts requests from Chrome extensions by default (<code>OLLAMA_ORIGINS</code>).
+        <code>OLLAMA_HOST=0.0.0.0</code> and use that machine's address here. No <code>OLLAMA_ORIGINS</code> setting is needed: DomBot removes the <code>Origin</code> header on its own requests to this host.
       </div>
       <div class="row">
         <button id="test" class="secondary">Test connection</button>

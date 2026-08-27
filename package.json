@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Chrome extension: a collapsible Claude chat panel on every page, with tools that read and change the page and saved changes that replay on load.",
+  "description": "Browser extension: a collapsible chat panel on every page backed by your own Ollama, with tools that read and change the page and saved changes that replay on load.",
+  "license": "GPL-3.0-only",
   "scripts": {
     "build": "./scripts/build.sh",
     "test": "./scripts/test.sh",

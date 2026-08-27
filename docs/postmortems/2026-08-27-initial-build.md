@@ -2,7 +2,7 @@
 
 ## Summary
 
-Built DomBot from nothing in one session: a Chrome MV3 extension with a
+Built DomBot from nothing in one session: a browser extension (Chrome MV3) with a
 collapsible Claude chat panel, three DOM tools plus a saved-changes tool, and
 replay of saved changes on every page load. 32 unit tests, build script,
 docs, and a new repo under `mysticflounder`.
