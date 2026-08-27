@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>DomBot settings</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #16181c;
+        --muted: #6b7280;
+        --bg: #ffffff;
+        --panel: #f5f6f7;
+        --border: #d9dde2;
+        --accent: #d97757;
+        --ok: #1b8a4c;
+        --bad: #c62828;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e7e9ea;
+          --muted: #9aa0a6;
+          --bg: #1f2023;
+          --panel: #2a2b2f;
+          --border: #3b3d42;
+        }
+      }
+      body {
+        font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        color: var(--fg);
+        background: var(--bg);
+        margin: 0;
+        padding: 24px;
+        max-width: 720px;
+      }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      h2 { font-size: 15px; margin: 28px 0 8px; }
+      .sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
+      label { display: block; font-weight: 600; margin: 16px 0 6px; font-size: 13px; }
+      input[type="text"], input[type="password"], input[type="number"], select, textarea {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 9px 11px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg);
+        color: var(--fg);
+        font: inherit;
+        font-size: 13px;
+      }
+      input[type="password"], input[type="text"].mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      textarea { min-height: 90px; resize: vertical; }
+      input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+      .hint { color: var(--muted); font-size: 12px; margin-top: 5px; }
+      .row { display: flex; gap: 8px; align-items: center; margin-top: 20px; flex-wrap: wrap; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+      button {
+        font: inherit;
+        font-weight: 600;
+        padding: 9px 16px;
+        border-radius: 999px;
+        border: 1px solid transparent;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+      }
+      button.secondary { background: transparent; color: var(--fg); border-color: var(--border); }
+      button.small { padding: 3px 10px; font-size: 12px; }
+      button.danger { background: transparent; color: var(--bad); border-color: var(--bad); }
+      button:hover { filter: brightness(1.08); }
+      .checkbox { display: flex; align-items: center; gap: 8px; margin-top: 18px; font-size: 13px; }
+      .checkbox input { margin: 0; }
+      .checkbox label { margin: 0; font-weight: 400; }
+      .saved { color: var(--ok); font-size: 12px; font-weight: 600; opacity: 0; transition: opacity .2s; }
+      .saved.show { opacity: 1; }
+      .result { font-size: 13px; margin-top: 10px; min-height: 18px; }
+      .result.ok { color: var(--ok); }
+      .result.bad { color: var(--bad); }
+      hr { border: 0; border-top: 1px solid var(--border); margin: 28px 0 0; }
+      .site { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-top: 10px; }
+      .site-head { display: flex; align-items: center; justify-content: space-between; font-weight: 600; margin-bottom: 6px; }
+      .edit { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border); font-size: 12.5px; }
+      .edit.off { opacity: .55; }
+      .edit .desc { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .edit .path { color: var(--muted); font-size: 11px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .edit select { width: auto; padding: 2px 6px; font-size: 12px; }
+      .empty { color: var(--muted); font-size: 13px; margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>DomBot</h1>
+    <p class="sub">A Claude chat panel on every page that can read and change the page. Changes are saved here and applied again on every load.</p>
+
+    <label for="apiKey">Anthropic API key</label>
+    <input type="password" id="apiKey" placeholder="sk-ant-…" spellcheck="false" autocomplete="off" />
+    <div class="hint">Stored in this browser profile's extension storage, in plain text. Anyone with this profile can read it.</div>
+
+    <div class="grid">
+      <div>
+        <label for="model">Model</label>
+        <input type="text" id="model" class="mono" spellcheck="false" />
+        <div class="hint">Default claude-opus-5. Any current Messages API model id works.</div>
+      </div>
+      <div>
+        <label for="effort">Effort</label>
+        <select id="effort">
+          <option value="low">low</option>
+          <option value="medium">medium</option>
+          <option value="high">high (default)</option>
+          <option value="xhigh">xhigh</option>
+          <option value="max">max</option>
+        </select>
+        <div class="hint">How hard the model thinks. Lower is faster and cheaper.</div>
+      </div>
+      <div>
+        <label for="maxTokens">Max output tokens</label>
+        <input type="number" id="maxTokens" min="256" max="128000" step="256" />
+        <div class="hint">Ceiling per reply, not a target.</div>
+      </div>
+    </div>
+
+    <div class="checkbox">
+      <input type="checkbox" id="fallbacks" />
+      <label for="fallbacks">Server-side fallbacks: if the model declines a request, retry it on Anthropic's recommended fallback model</label>
+    </div>
+
+    <div class="checkbox">
+      <input type="checkbox" id="showPill" />
+      <label for="showPill">Show the DomBot pill on every page (off: use the toolbar button or Alt+Shift+D)</label>
+    </div>
+
+    <label for="customInstructions">Extra instructions</label>
+    <textarea id="customInstructions" placeholder="Added to the system prompt on every request. Optional."></textarea>
+
+    <div class="row">
+      <button id="save">Save</button>
+      <button id="test" class="secondary">Test key and model</button>
+      <span class="saved" id="savedBadge">Saved</span>
+    </div>
+    <div class="result" id="testResult"></div>
+
+    <hr />
+    <h2>Saved changes</h2>
+    <p class="sub">Everything DomBot changed and applies again on load, grouped by site. Turning one off or deleting it takes effect on the next load of that page.</p>
+    <div id="edits"></div>
+    <div class="row">
+      <button id="clearAll" class="danger">Delete every saved change</button>
+    </div>
+
+    <script src="edits.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

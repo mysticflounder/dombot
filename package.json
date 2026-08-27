@@ -1,0 +1,19 @@
+{
+  "name": "dombot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Chrome extension: a collapsible Claude chat panel on every page, with tools that read and change the page and saved changes that replay on load.",
+  "scripts": {
+    "build": "./scripts/build.sh",
+    "test": "./scripts/test.sh",
+    "test:unit": "node --test \"test/*.test.js\"",
+    "icons": "node scripts/make-icons.js"
+  },
+  "devDependencies": {
+    "jsdom": "^30.0.1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
